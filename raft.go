@@ -77,6 +77,10 @@ func (rn *RaftNode) Shutdown() {
 	rn.shutdownCh <- struct{}{}
 }
 
+// HandleAppend 处理客户端追加日志请求. 当日志被大多数副本成功提交后会向返回的 channel 发送信号
+// okCh, _ := rn.HandleAppend(command)
+// <-okCh
+// // Command has been submitted
 func (rn *RaftNode) HandleAppend(command []byte) (<-chan struct{}, error) {
 	idx, err := rn.raftLog.Append(command, rn.getCurrTerm())
 	if err != nil {
@@ -89,7 +93,7 @@ func (rn *RaftNode) HandleAppend(command []byte) (<-chan struct{}, error) {
 	return commitCh, nil
 }
 
-// HandleAppendEntries 处理追加条目请求
+// HandleAppendEntries raft follower 处理追加日志条目请求
 func (rn *RaftNode) HandleAppendEntries(req *AppendEntriesReq) *AppendEntriesResp {
 	currTerm := rn.getCurrTerm()
 	resp := &AppendEntriesResp{
