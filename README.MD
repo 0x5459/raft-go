@@ -21,7 +21,7 @@ go run .\example\client\client.go --url "http://127.0.0.1:2001" set hello raft
 ```
 output:
 ```
-
+OK
 --------------------
 latency: <0.03 sec>
 ```
@@ -33,7 +33,6 @@ go run .\example\client\client.go --url "http://127.0.0.1:2001" get hello
 output:
 ```
 raft
-
 --------------------
 latency: <0.00 sec>
 ```
@@ -44,7 +43,7 @@ go run .\example\client\client.go --url "http://127.0.0.1:2001" rm hello
 ```
 output:
 ```
-
+OK
 --------------------
 latency: <0.00 sec>
 ```

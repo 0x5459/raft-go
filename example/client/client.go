@@ -103,6 +103,8 @@ func main() {
 func printErrAndLatency(latency time.Duration, err error) {
 	if err != nil {
 		printError(err)
+	} else {
+		fmt.Println("OK")
 	}
 	printLatency(latency)
 }
@@ -111,7 +113,6 @@ func printError(err error) {
 }
 
 func printLatency(latency time.Duration) {
-	fmt.Println()
 	fmt.Println("--------------------")
 	fmt.Printf("latency: <%.2f sec>\n", float64(latency)/float64(time.Second))
 }
