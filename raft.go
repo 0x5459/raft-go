@@ -111,11 +111,16 @@ func (rn *RaftNode) HandleAppendEntries(req *AppendEntriesReq) *AppendEntriesRes
 		rn.changeTerm(req.Term)
 		rn.becomeFollower()
 	}
-
-	if rn.getStateRole() == Follower {
+	stateRole := rn.getStateRole()
+	if stateRole == Follower {
+		// 发送重置心跳信号
 		rn.heartbeatCh <- struct{}{}
 	}
-	rn.setLeaderId(req.LeaderId)
+
+	if stateRole != Leader {
+		rn.setLeaderId(req.LeaderId)
+	}
+
 	ok, err := rn.raftLog.AppendEntries(req.PrevLogIdx, req.PrevLogTerm, req.LeaderCommit, req.Entries)
 	if err != nil {
 		rn.logger.WithError(err).Errorln("Failed to handle append entries request")
@@ -125,7 +130,7 @@ func (rn *RaftNode) HandleAppendEntries(req *AppendEntriesReq) *AppendEntriesRes
 	return resp
 }
 
-// HandleRequestVote 处理请求投票的请求
+// HandleRequestVote raft follower 处理请求投票的请求
 func (rn *RaftNode) HandleRequestVote(req *RequestVoteReq) *RequestVoteResp {
 	currTerm := rn.getCurrTerm()
 	resp := &RequestVoteResp{
