@@ -3,15 +3,18 @@ package raft
 import (
 	"context"
 	"errors"
+	cmap "github.com/orcaman/concurrent-map"
 	"math/rand"
 	"sort"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sirupsen/logrus"
 )
 
-type StateRole int
+type StateRole int32
 
 const (
 	Follower StateRole = iota
@@ -44,6 +47,7 @@ func NewRaftNode(
 		electionTimeoutInMilli:  electionTimeoutInMilli,
 		HeartbeatTimeoutInMilli: heartbeatTimeoutInMilli,
 		heartbeatCh:             make(chan struct{}, 1),
+		commitCh:                cmap.New(),
 		logger:                  logger,
 	}, nil
 }
@@ -65,12 +69,13 @@ type RaftNode struct {
 
 	heartbeatCh chan struct{}
 
-	// commitCh<logIdx, 通知客户端消息已被提交的 channel>
-	commitCh map[uint64]chan<- struct{}
+	// commitCh[logIdx] 通知客户端消息已被提交的 channel
+	commitCh cmap.ConcurrentMap
 
 	shutdownCh chan struct{}
 
-	logger *logrus.Logger
+	logger   *logrus.Logger
+	voteLock sync.Mutex
 }
 
 func (rn *RaftNode) Shutdown() {
@@ -87,9 +92,8 @@ func (rn *RaftNode) HandleAppend(command []byte) (<-chan struct{}, error) {
 		rn.logger.WithError(err).Errorln("Failed to append command")
 		return nil, err
 	}
-	// TODO lock
 	commitCh := make(chan struct{}, 1)
-	rn.commitCh[idx] = commitCh
+	rn.commitCh.Set(strconv.FormatUint(idx, 10), commitCh)
 	return commitCh, nil
 }
 
@@ -132,6 +136,9 @@ func (rn *RaftNode) HandleAppendEntries(req *AppendEntriesReq) *AppendEntriesRes
 
 // HandleRequestVote raft follower 处理请求投票的请求
 func (rn *RaftNode) HandleRequestVote(req *RequestVoteReq) *RequestVoteResp {
+	rn.voteLock.Lock()
+	defer rn.voteLock.Unlock()
+
 	currTerm := rn.getCurrTerm()
 	resp := &RequestVoteResp{
 		Term:        currTerm,
@@ -213,6 +220,7 @@ func (rn *RaftNode) runCandidate() {
 	// TODO LOCK
 	rn.votedFor = rn.Id
 
+	// rn.logger.Infoln("start an election")
 	// 发送请求投票的 RPC 给其他所有服务器
 	lastEntryIdx, lastEntryTerm := rn.raftLog.LastEntry()
 	req := &RequestVoteReq{
@@ -236,6 +244,7 @@ func (rn *RaftNode) runCandidate() {
 			}
 			if grantedVotes >= rn.quorum {
 				// 选举成功
+				rn.logger.Infof("won the election. %d votes", grantedVotes)
 				rn.becomeLeader()
 				return
 			}
@@ -291,15 +300,21 @@ func (rn *RaftNode) runLeader() {
 			newIdx := findMajorityIdx(matchIdx)
 			if ok, oldIdx := rn.raftLog.CommitTo(newIdx); ok {
 				for i := oldIdx + 1; i <= newIdx; i++ {
-					// TODO LOCK
 					// 通知客户端新消息提交成功
-					rn.commitCh[i] <- struct{}{}
+					rn.notifyClient(i)
 				}
 			}
 
 		case <-rn.shutdownCh:
 			return
 		}
+	}
+}
+
+func (rn *RaftNode) notifyClient(commitIdx uint64) {
+	if chi, ok := rn.commitCh.Pop(strconv.FormatUint(commitIdx, 10)); ok {
+		ch := chi.(chan struct{})
+		ch <- struct{}{}
 	}
 }
 
@@ -315,8 +330,7 @@ func (rn *RaftNode) becomeCandidate() {
 
 func (rn *RaftNode) becomeLeader() {
 	rn.logger.Infoln("become leader")
-	// TODO LOCK
-	rn.commitCh = make(map[uint64]chan<- struct{})
+	rn.commitCh = cmap.New()
 	rn.setLeaderId(rn.Id)
 	rn.setStateRole(Leader)
 }
@@ -333,23 +347,19 @@ func (rn *RaftNode) LeaderNodeName() (string, bool) {
 }
 
 func (rn *RaftNode) getStateRole() StateRole {
-	// TODO atomic
-	return rn.stateRole
+	return StateRole(atomic.LoadInt32((*int32)(&rn.stateRole)))
 }
 
 func (rn *RaftNode) setStateRole(newRole StateRole) {
-	// TODO atomic
-	rn.stateRole = newRole
+	atomic.StoreInt32((*int32)(&rn.stateRole), int32(newRole))
 }
 
 func (rn *RaftNode) getCurrTerm() uint64 {
-	// TODO atomic
-	return rn.currTerm
+	return atomic.LoadUint64(&rn.currTerm)
 }
 
 func (rn *RaftNode) incrCurrTerm() {
-	// TODO atomic
-	rn.currTerm++
+	atomic.AddUint64(&rn.currTerm, 1)
 }
 
 func (rn *RaftNode) changeTerm(newTerm uint64) {
@@ -362,12 +372,10 @@ func (rn *RaftNode) changeTerm(newTerm uint64) {
 }
 
 func (rn *RaftNode) getLeaderId() int {
-	// TODO atomic
 	return rn.leaderId
 }
 
 func (rn *RaftNode) setLeaderId(leaderId int) {
-	// TODO atomic
 	if rn.leaderId != leaderId {
 		rn.logger.Infof("new leader id: %d.", leaderId)
 		rn.leaderId = leaderId
